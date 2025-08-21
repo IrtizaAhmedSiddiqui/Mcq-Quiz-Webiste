@@ -5,6 +5,7 @@ import streamlit as st
 from streamlit_option_menu import option_menu
 import base64
 import random
+import difflib
 
 
 def main():
@@ -141,6 +142,99 @@ def show_home_page():
                             st.session_state.show_random_options = False
                             st.rerun()
 
+                # Keyword-based quiz creator
+                st.header("🔎 Create Quiz by Keyword")
+                kw_col1, kw_col2 = st.columns([3, 1])
+                with kw_col1:
+                    home_keywords = st.text_input(
+                        "Enter keyword(s) (comma-separated)",
+                        value="",
+                        help="Example: helicopter, rotor, flight"
+                    )
+                with kw_col2:
+                    home_fuzzy = st.checkbox(
+                        "Fuzzy match", value=True, help="Catch typos like 'helicoptior'")
+
+                kw_btn_col1, kw_btn_col2 = st.columns(2)
+                with kw_btn_col1:
+                    if st.button("🔎 Create Keyword Quiz", use_container_width=True):
+                        keywords = [k.strip()
+                                    for k in home_keywords.split(',') if k.strip()]
+                        filtered = filter_mcqs_by_keywords(
+                            st.session_state.original_mcqs, keywords, use_fuzzy=home_fuzzy, search_in_options=True)
+                        if filtered:
+                            st.session_state.mcqs = filtered
+                            st.session_state.is_random_quiz = False
+                            initialize_quiz()
+                            st.rerun()
+                        else:
+                            st.warning(
+                                "No questions matched the given keywords.")
+                with kw_btn_col2:
+                    st.caption(
+                        "Searches in questions and options. Case-insensitive.")
+
+                # Range-based quiz creator
+                st.header("📏 Create Quiz by Question Range")
+                st.caption(
+                    "Drag to pick a range of questions (1-indexed, inclusive).")
+                total = len(st.session_state.original_mcqs)
+
+                # Responsive range slider
+                default_range = (1, total if total <= 25 else 25)
+                start_q, end_q = st.slider(
+                    "Select range",
+                    min_value=1,
+                    max_value=total,
+                    value=default_range,
+                    step=1,
+                    key="range_slider",
+                )
+
+                # Options for ordering and preview
+                opt_col1, opt_col2, _ = st.columns([1, 1, 2])
+                with opt_col1:
+                    randomize_order = st.checkbox(
+                        "Randomize order", value=False, key="range_randomize")
+                with opt_col2:
+                    show_preview = st.checkbox(
+                        "Show preview", value=True, key="range_preview")
+
+                # Live summary and optional preview
+                start_idx = int(start_q) - 1
+                end_idx = int(end_q)
+                ranged = st.session_state.original_mcqs[start_idx:end_idx]
+                st.info(
+                    f"Selected Q{start_q}–Q{end_q} • {len(ranged)} questions")
+
+                if show_preview and ranged:
+                    st.caption("Preview of selected range:")
+                    for i, mcq in enumerate(ranged[:3]):
+                        title = mcq['question'] if isinstance(
+                            mcq.get('question'), str) else str(mcq.get('question'))
+                        st.write(
+                            f"- Q{start_q + i}: {title[:100]}{'...' if len(title) > 100 else ''}")
+
+                action_cols = st.columns([1, 1, 2])
+                with action_cols[0]:
+                    if st.button("📏 Create Range Quiz", use_container_width=True, key="btn_create_range"):
+                        if not ranged:
+                            st.warning("Selected range returned no questions.")
+                        else:
+                            final_mcqs = list(ranged)
+                            if randomize_order:
+                                random.shuffle(final_mcqs)
+                            st.session_state.mcqs = final_mcqs
+                            st.session_state.is_random_quiz = False
+                            initialize_quiz()
+                            st.rerun()
+                with action_cols[1]:
+                    if st.button("❌ Reset Range", use_container_width=True, key="btn_reset_range"):
+                        st.session_state.range_slider = (1, min(25, total))
+                        st.session_state.range_randomize = False
+                        st.session_state.range_preview = True
+                        st.rerun()
+
                 # Preview section
                 st.header("📋 Preview")
                 preview_questions = min(3, len(mcqs))
@@ -171,6 +265,72 @@ def generate_random_quiz(mcqs, num_questions):
     random_mcqs = [mcqs[i] for i in selected_indices]
 
     return random_mcqs
+
+
+def _normalize_text(text):
+    """Normalize text for matching (casefold and strip extra spaces)."""
+    if not isinstance(text, str):
+        text = str(text)
+    return re.sub(r"\s+", " ", text).strip().casefold()
+
+
+def _contains_keyword(text, keyword, use_fuzzy=False):
+    """Check if text contains keyword (case-insensitive), with optional fuzzy matching."""
+    norm_text = _normalize_text(text)
+    norm_kw = _normalize_text(keyword)
+
+    # Direct substring match first (fast path)
+    if norm_kw in norm_text:
+        return True
+
+    if not use_fuzzy or not norm_kw:
+        return False
+
+    # Fuzzy check against words and sliding windows
+    words = norm_text.split()
+    # Compare with individual words
+    for word in words:
+        if difflib.SequenceMatcher(None, norm_kw, word).ratio() >= 0.8:
+            return True
+    # Compare with 2-3 word windows to catch short phrases
+    for window_size in (2, 3):
+        for i in range(len(words) - window_size + 1):
+            window = " ".join(words[i:i + window_size])
+            if difflib.SequenceMatcher(None, norm_kw, window).ratio() >= 0.8:
+                return True
+    return False
+
+
+def filter_mcqs_by_keywords(mcqs, keywords, use_fuzzy=False, search_in_options=True):
+    """Filter MCQs where question or options contain any of the keywords.
+
+    Args:
+        mcqs: List of MCQ dicts {question, options, answer}
+        keywords: List[str] of keywords to match
+        use_fuzzy: Allow fuzzy matching for typos
+        search_in_options: Search in answer options as well
+    Returns:
+        List of MCQs matching any keyword
+    """
+    if not keywords:
+        return []
+    normalized_keywords = [k for k in (kw.strip() for kw in keywords) if k]
+    if not normalized_keywords:
+        return []
+
+    filtered = []
+    for mcq in mcqs:
+        question_text = mcq.get("question", "")
+        match_found = any(_contains_keyword(question_text, kw, use_fuzzy)
+                          for kw in normalized_keywords)
+        if not match_found and search_in_options:
+            for _, opt_text in mcq.get("options", {}).items():
+                if any(_contains_keyword(opt_text, kw, use_fuzzy) for kw in normalized_keywords):
+                    match_found = True
+                    break
+        if match_found:
+            filtered.append(mcq)
+    return filtered
 
 
 def initialize_quiz():
@@ -315,21 +475,54 @@ def show_quiz_page():
 def show_search_dialog():
     """Show search dialog using sidebar"""
     with st.sidebar:
-        st.subheader("🔍 Search Question")
-        st.write("Enter question number to jump to:")
-        qnum = st.number_input("Question #", min_value=1, max_value=len(
-            st.session_state.mcqs), value=1, key="search_qnum")
+        st.subheader("🔍 Search / Create Quiz")
+        mode = st.radio("Choose mode:", [
+                        "By number", "By keyword"], key="search_mode")
 
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Go", key="search_go"):
-                st.session_state.current_question = qnum - 1
-                st.session_state.show_search = False
-                st.rerun()
-        with col2:
-            if st.button("Cancel", key="search_cancel"):
-                st.session_state.show_search = False
-                st.rerun()
+        if mode == "By number":
+            st.write("Enter question number to jump to:")
+            qnum = st.number_input("Question #", min_value=1, max_value=len(
+                st.session_state.mcqs), value=1, key="search_qnum")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Go", key="search_go"):
+                    st.session_state.current_question = qnum - 1
+                    st.session_state.show_search = False
+                    st.rerun()
+            with col2:
+                if st.button("Cancel", key="search_cancel"):
+                    st.session_state.show_search = False
+                    st.rerun()
+        else:
+            st.write("Enter keywords to filter questions (comma-separated):")
+            keyword_text = st.text_input(
+                "Keywords", value="", key="search_keywords")
+            fuzzy = st.checkbox(
+                "Allow fuzzy matching (catch typos)", value=True, key="search_fuzzy")
+            search_scope = st.radio("Search scope:", [
+                                    "All loaded questions", "Current quiz only"], index=0, key="search_scope")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Create Quiz", key="keyword_create_quiz"):
+                    base_set = st.session_state.original_mcqs if search_scope == "All loaded questions" else st.session_state.mcqs
+                    keywords = [k.strip()
+                                for k in keyword_text.split(",") if k.strip()]
+                    filtered = filter_mcqs_by_keywords(
+                        base_set, keywords, use_fuzzy=fuzzy, search_in_options=True)
+                    if filtered:
+                        st.session_state.mcqs = filtered
+                        st.session_state.is_random_quiz = False
+                        initialize_quiz()
+                        st.session_state.show_search = False
+                        st.rerun()
+                    else:
+                        st.warning("No questions matched the given keywords.")
+            with col2:
+                if st.button("Close", key="keyword_close"):
+                    st.session_state.show_search = False
+                    st.rerun()
 
 
 def show_marked_dialog():
