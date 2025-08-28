@@ -8,6 +8,11 @@ import random
 import difflib
 
 
+def ordered_option_letters(options_dict):
+    """Return option keys ordered as A, B, C, D if present."""
+    return [l for l in ['A', 'B', 'C', 'D'] if l in options_dict]
+
+
 def main():
     st.set_page_config(
         page_title="MCQ Quiz Application",
@@ -17,6 +22,8 @@ def main():
     )
 
     # Initialize session state
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
     if 'mcqs' not in st.session_state:
         st.session_state.mcqs = []
     if 'original_mcqs' not in st.session_state:
@@ -42,8 +49,39 @@ def main():
     if 'show_random_options' not in st.session_state:
         st.session_state.show_random_options = False
 
+    # Helper: consistent option ordering A, B, C, D
+    def ordered_option_letters(options_dict):
+        return [l for l in ['A', 'B', 'C', 'D'] if l in options_dict]
+
+    # Authentication gate
+    if not st.session_state.authenticated:
+        st.title("🔐 Secure Access")
+        st.caption("Enter password to continue")
+        pwd_col1, pwd_col2 = st.columns([3, 1])
+        with pwd_col1:
+            password_input = st.text_input(
+                "Password", type="password", value="")
+        with pwd_col2:
+            login_clicked = st.button("Login", type="primary")
+        if login_clicked:
+            if password_input == 'pakistan1947':
+                st.session_state.authenticated = True
+                st.success("Access granted")
+                st.rerun()
+            else:
+                st.error("Invalid password")
+        st.stop()
+
     with st.sidebar:
         st.title("📚 MCQ Quiz App")
+        if st.button("Logout"):
+            st.session_state.authenticated = False
+            # Clear session quiz state on logout for safety
+            st.session_state.mcqs = []
+            st.session_state.original_mcqs = []
+            st.session_state.quiz_started = False
+            st.session_state.show_results = False
+            st.rerun()
 
         selected = option_menu(
             menu_title="Navigation",
@@ -74,25 +112,39 @@ def show_home_page():
     st.markdown("---")
 
     # File upload section
-    st.header("📁 Load Your MCQ Excel File")
+    st.header("📁 Load Your MCQ Excel File(s)")
 
-    uploaded_file = st.file_uploader(
-        "Choose an Excel file with MCQs",
+    uploaded_files = st.file_uploader(
+        "Choose one or more Excel files with MCQs",
         type=['xlsx', 'xls', 'xlsm'],
-        help="Upload an Excel file containing your MCQ questions"
+        help="Upload one or multiple Excel files containing your MCQ questions",
+        accept_multiple_files=True
     )
 
-    if uploaded_file is not None:
+    if uploaded_files:
         try:
-            with st.spinner("Loading MCQs..."):
-                mcqs = extract_mcqs_from_excel(uploaded_file)
+            with st.spinner("Loading MCQs from selected file(s)..."):
+                combined_mcqs = []
+                per_file_counts = []
+                for f in uploaded_files:
+                    file_mcqs = extract_mcqs_from_excel(f)
+                    per_file_counts.append(
+                        (getattr(f, 'name', 'file'), len(file_mcqs)))
+                    combined_mcqs.extend(file_mcqs)
+
+            mcqs = combined_mcqs
 
             if mcqs:
                 st.session_state.original_mcqs = mcqs
-                st.success(f"✅ Successfully loaded {len(mcqs)} MCQs!")
+                st.success(
+                    f"✅ Loaded {len(mcqs)} MCQs from {len(uploaded_files)} file(s)!")
+
+                with st.expander("View per-file import summary"):
+                    for fname, count in per_file_counts:
+                        st.write(f"- {fname}: {count} question(s)")
 
                 # Quiz type selection
-                st.header("🎲 Choose Quiz Type")
+                st.header("🎲 Choose Quiz Type (Combined Pool)")
                 st.info(
                     "💡 **Tip:** Mark important questions during the quiz using the ⭐ button, then create focused practice quizzes with just those questions!")
 
@@ -114,14 +166,14 @@ def show_home_page():
                 if st.session_state.get('show_random_options', False):
                     st.subheader("🎲 Random Quiz Options")
 
-                    # Calculate max questions (minimum of 50 or total available)
-                    max_questions = min(50, len(mcqs))
+                    # Calculate max questions (minimum of 600 or total available)
+                    max_questions = min(600, len(mcqs))
 
                     num_questions = st.slider(
                         "Number of questions:",
                         min_value=5,
                         max_value=max_questions,
-                        value=min(50, max_questions),
+                        value=min(600, max_questions),
                         help=f"Choose between 5 and {max_questions} questions"
                     )
 
@@ -143,7 +195,7 @@ def show_home_page():
                             st.rerun()
 
                 # Keyword-based quiz creator
-                st.header("🔎 Create Quiz by Keyword")
+                st.header("🔎 Create Quiz by Keyword (from combined pool)")
                 kw_col1, kw_col2 = st.columns([3, 1])
                 with kw_col1:
                     home_keywords = st.text_input(
@@ -175,7 +227,7 @@ def show_home_page():
                         "Searches in questions and options. Case-insensitive.")
 
                 # Range-based quiz creator
-                st.header("📏 Create Quiz by Question Range")
+                st.header("📏 Create Quiz by Question Range (from combined pool)")
                 st.caption(
                     "Drag to pick a range of questions (1-indexed, inclusive).")
                 total = len(st.session_state.original_mcqs)
@@ -217,7 +269,7 @@ def show_home_page():
 
                 action_cols = st.columns([1, 1, 2])
                 with action_cols[0]:
-                    if st.button("📏 Create Range Quiz", use_container_width=True, key="btn_create_range"):
+                    if st.button("📏 Create Ranged Quiz", use_container_width=True, key="btn_create_range"):
                         if not ranged:
                             st.warning("Selected range returned no questions.")
                         else:
@@ -236,7 +288,7 @@ def show_home_page():
                         st.rerun()
 
                 # Preview section
-                st.header("📋 Preview")
+                st.header("📋 Preview (first few from combined pool)")
                 preview_questions = min(3, len(mcqs))
 
                 for i in range(preview_questions):
@@ -244,12 +296,12 @@ def show_home_page():
                         mcq = mcqs[i]
                         st.write(f"**Question:** {mcq['question']}")
                         st.write("**Options:**")
-                        for opt, text in mcq['options'].items():
-                            st.write(f"  {opt}. {text}")
+                        for opt in ordered_option_letters(mcq['options']):
+                            st.write(f"  {opt}. {mcq['options'][opt]}")
                         st.write(f"**Answer:** {mcq['answer']}")
 
             else:
-                st.error("❌ No MCQs found in the uploaded file!")
+                st.error("❌ No MCQs found in the uploaded file(s)!")
 
         except Exception as e:
             st.error(f"❌ Error loading file: {str(e)}")
@@ -454,12 +506,13 @@ def show_quiz_page():
             st.error(f"❌ Wrong! Correct answer is: **{mcq['answer']}**")
 
     # Create options
+    option_letters = ordered_option_letters(mcq['options'])
     option_selected = st.radio(
         "Choose an option:",
-        options=list(mcq['options'].keys()),
+        options=option_letters,
         format_func=lambda x: f"{x}. {mcq['options'][x]}",
         key=f"question_{current_idx}",
-        index=list(mcq['options'].keys()).index(
+        index=option_letters.index(
             previous_answer) if previous_answer else None
     )
 
@@ -624,7 +677,8 @@ def show_results_page():
             with st.expander(f"Question {idx+1}"):
                 st.write(f"**Question:** {mcq['question']}")
                 st.write("**Options:**")
-                for opt, text in mcq['options'].items():
+                for opt in ordered_option_letters(mcq['options']):
+                    text = mcq['options'][opt]
                     if user_answer == opt:
                         if opt == mcq['answer']:
                             st.write(
@@ -819,10 +873,35 @@ def show_detailed_analysis():
 def extract_mcqs_from_excel(uploaded_file):
     """Extract MCQs from uploaded Excel file"""
     try:
-        # Read the Excel file
-        df = pd.read_excel(uploaded_file)
+        # Ensure file pointer is at start for reliable reads
+        if hasattr(uploaded_file, 'seek'):
+            try:
+                uploaded_file.seek(0)
+            except Exception:
+                pass
 
-        return parse_excel_to_mcqs(df)
+        # Read ALL sheets; pandas returns a dict when sheet_name=None
+        try:
+            sheets = pd.read_excel(uploaded_file, sheet_name=None)
+        except Exception:
+            # Retry once after rewinding (covers cases where buffer moved during earlier operations)
+            if hasattr(uploaded_file, 'seek'):
+                try:
+                    uploaded_file.seek(0)
+                except Exception:
+                    pass
+            sheets = pd.read_excel(uploaded_file, sheet_name=None)
+
+        all_mcqs = []
+        for _, df in (sheets.items() if isinstance(sheets, dict) else [(None, sheets)]):
+            # Drop fully empty columns/rows to reduce noise
+            try:
+                df = df.dropna(axis=0, how='all').dropna(axis=1, how='all')
+            except Exception:
+                pass
+            all_mcqs.extend(parse_excel_to_mcqs(df))
+
+        return all_mcqs
 
     except Exception as e:
         st.error(f"Error reading Excel file: {e}")
@@ -831,20 +910,129 @@ def extract_mcqs_from_excel(uploaded_file):
 
 def parse_excel_to_mcqs(df):
     """Parse Excel DataFrame to MCQ format"""
-    mcqs = []
+    # Heuristic 1: Wide-table layout with headers like Question, A, B, C, D, Answer
+    lower_cols = [str(c).strip().casefold() for c in df.columns]
+    has_question_col = any('question' in c for c in lower_cols)
+    has_option_cols = any(c in {'a', 'option a', 'opt a'} for c in lower_cols)
+    has_answer_col = any('answer' in c or 'correct' in c for c in lower_cols)
+    if has_question_col and has_answer_col and (has_option_cols or any(c in {'b', 'c', 'd', 'option b', 'option c', 'option d'} for c in lower_cols)):
+        wide = parse_wide_table_excel(df)
+        if wide:
+            return wide
 
-    # Check if this is a multi-table Excel file
-    # Look for table names in the first column
+    # Heuristic 2: Multi-table marker in first column
     table_names = []
-    for i, row in df.iterrows():
-        first_val = str(row.iloc[0]).strip()
-        if first_val.startswith('Table') and first_val[5:].isdigit():
-            table_names.append((i, first_val))
+    try:
+        for i, row in df.iterrows():
+            first_val = str(row.iloc[0]).strip()
+            if first_val.startswith('Table') and first_val[5:].isdigit():
+                table_names.append((i, first_val))
+    except Exception:
+        table_names = []
 
     if table_names:
-        return parse_multi_table_excel(df, table_names)
-    else:
-        return parse_single_table_excel(df)
+        parsed = parse_multi_table_excel(df, table_names)
+        if parsed:
+            return parsed
+    # Try legacy single-table parser
+    parsed_single = parse_single_table_excel(df)
+    if parsed_single:
+        return parsed_single
+    # Final fallback: flexible free-form parser
+    return parse_flexible_excel(df)
+
+
+def parse_wide_table_excel(df):
+    """Parse a wide-table layout: one row per question with columns Question, A-D (or Option A-D), and Answer.
+
+    Supported variations:
+    - Column names like 'Question', 'A'/'Option A', 'B', 'C', 'D'
+    - 'Answer' column can be the letter (A/B/C/D) or the exact option text
+    - Case-insensitive, trims whitespace
+    """
+    def norm(s):
+        return str(s).strip()
+
+    # Build column map
+    col_map = {str(c).strip().casefold(): c for c in df.columns}
+
+    def find_col(*candidates):
+        for cand in candidates:
+            key = cand.casefold()
+            if key in col_map:
+                return col_map[key]
+        return None
+
+    q_col = None
+    for name in df.columns:
+        if 'question' in str(name).casefold():
+            q_col = name
+            break
+    if q_col is None:
+        return []
+
+    a_col = find_col('A', 'Option A', 'Opt A', 'Choice A')
+    b_col = find_col('B', 'Option B', 'Opt B', 'Choice B')
+    c_col = find_col('C', 'Option C', 'Opt C', 'Choice C')
+    d_col = find_col('D', 'Option D', 'Opt D', 'Choice D')
+    ans_col = None
+    for name in df.columns:
+        low = str(name).casefold().strip()
+        if 'answer' in low or 'correct' in low:
+            ans_col = name
+            break
+
+    if ans_col is None:
+        return []
+
+    option_cols = [('A', a_col), ('B', b_col), ('C', c_col), ('D', d_col)]
+    # Need at least two options present
+    if sum(1 for _, c in option_cols if c is not None) < 2:
+        return []
+
+    mcqs = []
+    for _, row in df.iterrows():
+        question = norm(row.get(q_col, ''))
+        if not question or question in {'nan', ''}:
+            continue
+
+        options = {}
+        for letter, col in option_cols:
+            if col is None:
+                continue
+            val = row.get(col)
+            text = norm(val) if not pd.isna(val) else ''
+            if text and text.casefold() != 'nan':
+                options[letter] = text
+
+        if len(options) < 2:
+            continue
+
+        raw_answer = row.get(ans_col)
+        answer_text = norm(raw_answer) if raw_answer is not None and not pd.isna(
+            raw_answer) else ''
+        answer_letter = None
+        # Try letter first
+        if answer_text.upper() in options.keys():
+            answer_letter = answer_text.upper()
+        else:
+            # Try match by text
+            for letter, text in options.items():
+                if answer_text and answer_text.casefold() == text.casefold():
+                    answer_letter = letter
+                    break
+
+        if not answer_letter:
+            # Skip if we cannot identify a valid answer
+            continue
+
+        mcqs.append({
+            "question": question,
+            "options": options,
+            "answer": answer_letter
+        })
+
+    return mcqs
 
 
 def parse_multi_table_excel(df, table_names):
@@ -867,7 +1055,13 @@ def parse_multi_table_excel(df, table_names):
 
 
 def parse_single_table_excel(df, table_name="Single Table"):
-    """Parse a single table section of the Excel file"""
+    """Parse a single table section of the Excel file (legacy layout).
+
+    Recognizes rows like:
+    - First cell 'Question' (any case) then question text in next cell
+    - Option rows where first cell is A/B/C/D (case-insensitive), possibly with punctuation (e.g., 'A.', 'B)')
+    - Correct answer indicated either by a separate marker column equal to the option letter, or by any cell containing the exact option letter
+    """
     mcqs = []
 
     # Process the table based on the actual structure
@@ -884,7 +1078,9 @@ def parse_single_table_excel(df, table_name="Single Table"):
             continue
 
         # Check if this row starts a new question
-        if row_values[0] == 'Question' and len(row_values) > 1:
+        first_token = row_values[0]
+        first_token_norm = str(first_token).strip().casefold()
+        if (first_token_norm.startswith('question') or first_token_norm in {'ques', 'q', 'q:'}) and len(row_values) > 1:
             # Save previous question if exists
             if current_question and current_choices and current_answer:
                 mcqs.append({
@@ -894,22 +1090,143 @@ def parse_single_table_excel(df, table_name="Single Table"):
                 })
 
             # Start new question
-            current_question = row_values[1]
+            # Use the next non-empty cell as question text
+            q_text = ''
+            for cell in row_values[1:]:
+                if cell and cell != 'nan':
+                    q_text = cell
+                    break
+            current_question = q_text
             current_choices = {}
             current_answer = None
 
         # Check if this row is a choice (A, B, C, D)
-        elif row_values[0] in ['A', 'B', 'C', 'D'] and len(row_values) > 1:
-            choice_letter = row_values[0]
-            choice_text = row_values[1]
-            if choice_text and choice_text != 'nan':
-                current_choices[choice_letter] = choice_text
+        else:
+            opt_token = row_values[0]
+            opt_token_str = str(opt_token).strip()
+            opt_letter = opt_token_str[:1].upper() if opt_token_str else ''
+            is_option_row = opt_letter in ['A', 'B', 'C', 'D']
+            if is_option_row and len(row_values) > 1:
+                choice_letter = opt_letter
+                # Prefer second cell as text; fallback to remainder of first cell after label
+                choice_text = row_values[1] if row_values[1] else opt_token_str[1:].lstrip(
+                    ' .:)\t-')
+                if choice_text and choice_text != 'nan':
+                    current_choices[choice_letter] = choice_text
 
-                # Check if this choice is the correct answer (look in column 3)
-                if len(row_values) > 3 and row_values[3] == choice_letter:
-                    current_answer = choice_letter
+                    # Detect correctness markers: any cell equals the letter, or explicit 'correct'
+                    correctness_detected = False
+                    for cell in row_values[2:]:
+                        cell_str = str(cell).strip()
+                        if not cell_str or cell_str == 'nan':
+                            continue
+                        if cell_str.upper() == choice_letter:
+                            correctness_detected = True
+                            break
+                        if cell_str.casefold() in {'correct', 'true', '✓', '✔'}:
+                            correctness_detected = True
+                            break
+                    if correctness_detected:
+                        current_answer = choice_letter
 
     # Add the last question
+    if current_question and current_choices and current_answer:
+        mcqs.append({
+            "question": current_question,
+            "options": current_choices,
+            "answer": current_answer
+        })
+
+    return mcqs
+
+
+def parse_flexible_excel(df):
+    """Very flexible parser that scans for 'Question' rows and subsequent A-D options,
+    with multiple possible answer markers, across loosely structured sheets."""
+    mcqs = []
+    current_question = None
+    current_choices = {}
+    current_answer = None
+
+    def is_question_row(values):
+        for val in values:
+            s = str(val).strip().casefold()
+            if s.startswith('question') or s in {'q', 'q:'}:
+                return True
+        return False
+
+    def extract_question_text(values):
+        texts = []
+        for val in values:
+            s = str(val).strip()
+            if not s or s.casefold() in {'question', 'q', 'q:'}:
+                continue
+            texts.append(s)
+        return ' '.join(texts).strip()
+
+    def option_letter(token):
+        if not token:
+            return None
+        s = str(token).strip()
+        if not s:
+            return None
+        letter = s[0].upper()
+        return letter if letter in ['A', 'B', 'C', 'D'] else None
+
+    for _, row in df.iterrows():
+        values = [str(val).strip() if not pd.isna(val)
+                  else '' for val in row.values]
+        if not any(values):
+            continue
+
+        if is_question_row(values):
+            if current_question and current_choices and current_answer:
+                mcqs.append({
+                    "question": current_question,
+                    "options": current_choices.copy(),
+                    "answer": current_answer
+                })
+            current_question = extract_question_text(
+                values) or values[1] if len(values) > 1 else ''
+            current_choices = {}
+            current_answer = None
+            continue
+
+        let = option_letter(values[0])
+        if let:
+            # Option text from next non-empty cell or tail of first
+            text = ''
+            for cell in values[1:]:
+                if cell and cell != 'nan':
+                    text = cell
+                    break
+            if not text:
+                tail = str(values[0])[1:].lstrip(' .:)\t-')
+                text = tail
+            if text:
+                current_choices[let] = text
+                # correctness markers in remaining cells
+                for cell in values[2:]:
+                    s = str(cell).strip()
+                    if not s or s == 'nan':
+                        continue
+                    if s.upper() == let or s.casefold() in {'correct', 'true', '✓', '✔'}:
+                        current_answer = let
+                        break
+            continue
+
+        # Row like ['Answer', 'B']
+        if values[0].casefold().startswith('answer') and len(values) > 1:
+            ans = str(values[1]).strip()
+            if ans.upper() in current_choices.keys():
+                current_answer = ans.upper()
+            else:
+                # try match by text
+                for letter, opt_text in current_choices.items():
+                    if ans and ans.casefold() == str(opt_text).strip().casefold():
+                        current_answer = letter
+                        break
+
     if current_question and current_choices and current_answer:
         mcqs.append({
             "question": current_question,
