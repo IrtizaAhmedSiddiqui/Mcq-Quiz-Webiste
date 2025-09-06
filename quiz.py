@@ -287,6 +287,87 @@ def show_home_page():
                         st.session_state.range_preview = True
                         st.rerun()
 
+                # Question number selection quiz creator
+                st.header(
+                    "🔢 Create Quiz by Question Numbers (from combined pool)")
+                st.caption(
+                    "Enter specific question numbers separated by commas (e.g., 1,2,11,56,90)")
+
+                qn_col1, qn_col2 = st.columns([3, 1])
+                with qn_col1:
+                    question_numbers_input = st.text_input(
+                        "Enter question numbers (comma-separated)",
+                        value="",
+                        help="Example: 1,2,11,56,90 or 5,10,15,20",
+                        key="question_numbers_input"
+                    )
+                with qn_col2:
+                    show_number_preview = st.checkbox(
+                        "Show preview", value=True, help="Preview selected questions", key="number_preview")
+
+                # Parse and validate question numbers
+                selected_mcqs = []
+                if question_numbers_input.strip():
+                    try:
+                        # Parse comma-separated numbers
+                        numbers_text = question_numbers_input.replace(' ', '')
+                        numbers = [int(n.strip())
+                                   for n in numbers_text.split(',') if n.strip()]
+
+                        # Filter valid numbers (1-indexed)
+                        valid_numbers = [n for n in numbers if 1 <= n <= total]
+                        invalid_numbers = [
+                            n for n in numbers if n < 1 or n > total]
+
+                        if invalid_numbers:
+                            st.warning(
+                                f"⚠️ Invalid question numbers (out of range 1-{total}): {invalid_numbers}")
+
+                        if valid_numbers:
+                            # Get MCQs for valid numbers (convert to 0-indexed)
+                            selected_mcqs = [
+                                st.session_state.original_mcqs[n-1] for n in valid_numbers]
+                            st.info(
+                                f"Selected {len(selected_mcqs)} questions: {sorted(valid_numbers)}")
+                        else:
+                            st.error("No valid question numbers entered!")
+
+                    except ValueError:
+                        st.error(
+                            "❌ Invalid input! Please enter numbers separated by commas (e.g., 1,2,3)")
+
+                # Preview selected questions
+                if show_number_preview and selected_mcqs:
+                    st.caption("Preview of selected questions:")
+                    for i, mcq in enumerate(selected_mcqs[:5]):  # Show first 5
+                        question_num = valid_numbers[i] if 'valid_numbers' in locals(
+                        ) else i+1
+                        title = mcq['question'] if isinstance(
+                            mcq.get('question'), str) else str(mcq.get('question'))
+                        st.write(
+                            f"- Q{question_num}: {title[:100]}{'...' if len(title) > 100 else ''}")
+
+                    if len(selected_mcqs) > 5:
+                        st.write(
+                            f"... and {len(selected_mcqs) - 5} more questions")
+
+                # Action buttons for question number selection
+                number_action_cols = st.columns([1, 1, 2])
+                with number_action_cols[0]:
+                    if st.button("🔢 Create Numbered Quiz", use_container_width=True, key="btn_create_numbered"):
+                        if not selected_mcqs:
+                            st.warning("No valid questions selected!")
+                        else:
+                            st.session_state.mcqs = selected_mcqs
+                            st.session_state.is_random_quiz = False
+                            initialize_quiz()
+                            st.rerun()
+
+                with number_action_cols[1]:
+                    if st.button("❌ Clear Numbers", use_container_width=True, key="btn_clear_numbers"):
+                        st.session_state.question_numbers_input = ""
+                        st.rerun()
+
                 # Preview section
                 st.header("📋 Preview (first few from combined pool)")
                 preview_questions = min(3, len(mcqs))
@@ -324,6 +405,89 @@ def _normalize_text(text):
     if not isinstance(text, str):
         text = str(text)
     return re.sub(r"\s+", " ", text).strip().casefold()
+
+
+def validate_mcq_options(question, options, answer):
+    """
+    Comprehensive validation for MCQ options to filter out invalid content.
+    Returns (valid_options, valid_answer) or (None, None) if MCQ should be skipped.
+    """
+    if not question or not options or not answer:
+        return None, None
+
+    question_normalized = _normalize_text(question)
+    valid_options = {}
+
+    # Expanded metadata words that shouldn't appear as options
+    metadata_words = {
+        'answers', 'options', 'choices', 'correct', 'answer', 'option', 'choice',
+        'question', 'questions', 'mcq', 'quiz', 'test', 'exam', 'blank', 'none',
+        'n/a', 'na', 'null', 'empty', 'skip', 'pass', 'fail', 'true', 'false',
+        'yes', 'no', 'maybe', 'unknown', 'undefined', 'n/a', 'na', 'tbd',
+        'to be determined', 'pending', 'incomplete', 'error', 'invalid',
+        'header', 'footer', 'title', 'subtitle', 'note', 'comment', 'remark',
+        'instruction', 'direction', 'guideline', 'rule', 'regulation', 'policy',
+        'procedure', 'process', 'step', 'stage', 'phase', 'level', 'grade',
+        'score', 'mark', 'point', 'value', 'number', 'digit', 'letter', 'word',
+        'text', 'string', 'data', 'information', 'content', 'material', 'item',
+        'object', 'subject', 'topic', 'theme', 'category', 'type', 'kind',
+        'sort', 'class', 'group', 'set', 'collection', 'list', 'array',
+        'table', 'chart', 'graph', 'diagram', 'figure', 'image', 'picture',
+        'photo', 'illustration', 'drawing', 'sketch', 'map', 'plan', 'layout'
+    }
+
+    for letter, option_text in options.items():
+        option_normalized = _normalize_text(option_text)
+
+        # Skip if option matches question exactly
+        if option_normalized == question_normalized:
+            continue
+
+        # Skip empty or very short options
+        if len(option_normalized) < 2:
+            continue
+
+        # Skip metadata words
+        if option_normalized in metadata_words:
+            continue
+
+        # Skip single letters or numbers
+        if len(option_normalized) == 1 and option_normalized.isalnum():
+            continue
+
+        # Skip options that are mostly question text (partial matches)
+        if len(option_normalized) > 5 and option_normalized in question_normalized:
+            continue
+
+        # Skip options that contain mostly question text
+        question_words = set(question_normalized.split())
+        option_words = set(option_normalized.split())
+        if len(option_words) > 0 and len(question_words.intersection(option_words)) / len(option_words) > 0.7:
+            continue
+
+        # Skip options that are just punctuation or special characters
+        if len(option_normalized.replace(' ', '').replace('.', '').replace(',', '').replace('!', '').replace('?', '')) < 2:
+            continue
+
+        # Skip options that look like Excel artifacts (common patterns)
+        excel_artifacts = [
+            'table', 'sheet', 'worksheet', 'cell', 'row', 'column', 'header',
+            'footer', 'title', 'subtitle', 'note', 'comment', 'remark',
+            'formula', 'function', 'calculation', 'result', 'output', 'input',
+            'data', 'value', 'text', 'number', 'date', 'time', 'format',
+            'style', 'color', 'font', 'size', 'bold', 'italic', 'underline'
+        ]
+
+        if any(artifact in option_normalized for artifact in excel_artifacts):
+            continue
+
+        valid_options[letter] = option_text
+
+    # Check if we have enough valid options and the answer is still valid
+    if len(valid_options) >= 2 and answer in valid_options:
+        return valid_options, answer
+
+    return None, None
 
 
 def _contains_keyword(text, keyword, use_fuzzy=False):
@@ -1026,11 +1190,15 @@ def parse_wide_table_excel(df):
             # Skip if we cannot identify a valid answer
             continue
 
-        mcqs.append({
-            "question": question,
-            "options": options,
-            "answer": answer_letter
-        })
+        # Use comprehensive validation
+        valid_options, valid_answer = validate_mcq_options(
+            question, options, answer_letter)
+        if valid_options and valid_answer:
+            mcqs.append({
+                "question": question,
+                "options": valid_options,
+                "answer": valid_answer
+            })
 
     return mcqs
 
@@ -1083,11 +1251,15 @@ def parse_single_table_excel(df, table_name="Single Table"):
         if (first_token_norm.startswith('question') or first_token_norm in {'ques', 'q', 'q:'}) and len(row_values) > 1:
             # Save previous question if exists
             if current_question and current_choices and current_answer:
-                mcqs.append({
-                    "question": current_question,
-                    "options": current_choices.copy(),
-                    "answer": current_answer
-                })
+                # Use comprehensive validation
+                valid_options, valid_answer = validate_mcq_options(
+                    current_question, current_choices, current_answer)
+                if valid_options and valid_answer:
+                    mcqs.append({
+                        "question": current_question,
+                        "options": valid_options,
+                        "answer": valid_answer
+                    })
 
             # Start new question
             # Use the next non-empty cell as question text
@@ -1114,28 +1286,34 @@ def parse_single_table_excel(df, table_name="Single Table"):
                 if choice_text and choice_text != 'nan':
                     current_choices[choice_letter] = choice_text
 
-                    # Detect correctness markers: any cell equals the letter, or explicit 'correct'
+                    # Detect correctness markers: any cell contains a valid answer letter, or explicit 'correct'
                     correctness_detected = False
                     for cell in row_values[2:]:
                         cell_str = str(cell).strip()
                         if not cell_str or cell_str == 'nan':
                             continue
-                        if cell_str.upper() == choice_letter:
+                        # Check if cell contains a valid answer letter (A, B, C, D)
+                        if cell_str.upper() in ['A', 'B', 'C', 'D']:
+                            current_answer = cell_str.upper()
                             correctness_detected = True
                             break
                         if cell_str.casefold() in {'correct', 'true', '✓', '✔'}:
                             correctness_detected = True
                             break
-                    if correctness_detected:
+                    if correctness_detected and not current_answer:
                         current_answer = choice_letter
 
     # Add the last question
     if current_question and current_choices and current_answer:
-        mcqs.append({
-            "question": current_question,
-            "options": current_choices,
-            "answer": current_answer
-        })
+        # Use comprehensive validation
+        valid_options, valid_answer = validate_mcq_options(
+            current_question, current_choices, current_answer)
+        if valid_options and valid_answer:
+            mcqs.append({
+                "question": current_question,
+                "options": valid_options,
+                "answer": valid_answer
+            })
 
     return mcqs
 
@@ -1156,13 +1334,22 @@ def parse_flexible_excel(df):
         return False
 
     def extract_question_text(values):
-        texts = []
-        for val in values:
-            s = str(val).strip()
-            if not s or s.casefold() in {'question', 'q', 'q:'}:
-                continue
-            texts.append(s)
-        return ' '.join(texts).strip()
+        """Extract question text from a row, preferring the second cell if available."""
+        if len(values) < 2:
+            return ''
+
+        # If the first cell is 'Question', 'Q', etc., take the second cell
+        first_cell = str(values[0]).strip().casefold()
+        if first_cell.startswith('question') or first_cell in {'q', 'q:'}:
+            return str(values[1]).strip() if len(values) > 1 else ''
+
+        # Otherwise, take the first non-empty cell after the first one
+        for i in range(1, len(values)):
+            cell_text = str(values[i]).strip()
+            if cell_text and cell_text != 'nan':
+                return cell_text
+
+        return ''
 
     def option_letter(token):
         if not token:
@@ -1181,11 +1368,15 @@ def parse_flexible_excel(df):
 
         if is_question_row(values):
             if current_question and current_choices and current_answer:
-                mcqs.append({
-                    "question": current_question,
-                    "options": current_choices.copy(),
-                    "answer": current_answer
-                })
+                # Use comprehensive validation
+                valid_options, valid_answer = validate_mcq_options(
+                    current_question, current_choices, current_answer)
+                if valid_options and valid_answer:
+                    mcqs.append({
+                        "question": current_question,
+                        "options": valid_options,
+                        "answer": valid_answer
+                    })
             current_question = extract_question_text(
                 values) or values[1] if len(values) > 1 else ''
             current_choices = {}
@@ -1210,7 +1401,11 @@ def parse_flexible_excel(df):
                     s = str(cell).strip()
                     if not s or s == 'nan':
                         continue
-                    if s.upper() == let or s.casefold() in {'correct', 'true', '✓', '✔'}:
+                    # Check if cell contains a valid answer letter (A, B, C, D)
+                    if s.upper() in ['A', 'B', 'C', 'D']:
+                        current_answer = s.upper()
+                        break
+                    if s.casefold() in {'correct', 'true', '✓', '✔'}:
                         current_answer = let
                         break
             continue
@@ -1228,11 +1423,15 @@ def parse_flexible_excel(df):
                         break
 
     if current_question and current_choices and current_answer:
-        mcqs.append({
-            "question": current_question,
-            "options": current_choices,
-            "answer": current_answer
-        })
+        # Use comprehensive validation
+        valid_options, valid_answer = validate_mcq_options(
+            current_question, current_choices, current_answer)
+        if valid_options and valid_answer:
+            mcqs.append({
+                "question": current_question,
+                "options": valid_options,
+                "answer": valid_answer
+            })
 
     return mcqs
 
